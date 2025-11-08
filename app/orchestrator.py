@@ -1,13 +1,28 @@
 import json
-from typing import Dict, Any, List
+from typing import Dict, Any
 from .models import ClassificationResult, DetectorSignals, Citation
 from .prompt_lib import get_prompt
 from .llm_client import call_llm
 
+TRUNCATE_CHARS = 1200
+
+def _prepare_pages(pages: Dict[int, str]) -> Dict[int, str]:
+    prepared = {}
+    for page_num, text in sorted(pages.items()):
+        snippet = (text or "").strip()
+        if len(snippet) > TRUNCATE_CHARS:
+            snippet = snippet[:TRUNCATE_CHARS].rsplit(" ", 1)[0] + " …"
+        prepared[page_num] = snippet
+    return prepared
+
 def _run_prompt(name: str, pages: Dict[int, str], extra: Dict[str, Any] = None) -> Any:
     prompt_cfg = get_prompt(name)
     content_payload = {
-        "pages": pages,
+        "pages": _prepare_pages(pages),
+        "page_count": len(pages),
+        "notes": [
+            "Text truncated to ~1200 characters per page to meet safety budget."
+        ],
         "extra": extra or {}
     }
     messages = [

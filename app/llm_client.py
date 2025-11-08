@@ -33,7 +33,7 @@ SAFETY_SETTINGS = [
 ]
 
 ROLE_MAP = {
-    "system": "user",     # Gemini only accepts user/model roles
+    "system": "user",     
     "assistant": "model",
     "tool": "model",
 }
