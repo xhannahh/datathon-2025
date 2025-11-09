@@ -1,0 +1,9 @@
+fastapi
+uvicorn
+python-multipart
+pydantic
+PyMuPDF
+python-docx
+pillow
+regex
+pyyaml
