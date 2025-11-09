@@ -48,10 +48,16 @@ def _extract_text(candidate) -> str:
     return "".join(text_chunks).strip()
 
 def call_llm(messages: List[Dict[str, str]]) -> Dict[str, Any]:
-    formatted = []
-    for msg in messages:
-        role = ROLE_MAP.get(msg["role"], msg["role"])
-        formatted.append({"role": role, "parts": [{"text": msg["content"]}]})
+    """
+    Implement actual LLM call here.
+    For the datathon, this stub can be replaced with the provided endpoint.
+    Must return JSON-deserializable content (we assume tool prompts enforce JSON).
+    """
+    # Placeholder: echo-style fake result to keep pipeline testable.
+    # In real implementation, you:
+    # - send `messages` to LLM
+    # - parse JSON from response
+    return {"mock": True, "messages": messages}
 
     try:
         response = MODEL.generate_content(
