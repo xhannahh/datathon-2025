@@ -6,24 +6,47 @@ import { Progress } from "@/components/ui/progress";
 import { Upload as UploadIcon, FileText, CheckCircle, AlertTriangle, Lock, Eye, X } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { motion } from "framer-motion";
+import { uploadDocument, classifyDocument } from "@/services/api";
 
 const float = (delay = 0): any => ({
   initial: { opacity: 0, y: 12, scale: 0.98 },
   animate: { opacity: 1, y: 0, scale: 1, transition: { delay, duration: 0.5, ease: "easeOut" } },
 });
 
+interface Citation {
+  page: number;
+  snippet: string;
+  image_index?: number | null;
+  region?: string | null;
+  source?: string;
+}
+
 interface AnalysisResult {
   fileName: string;
   classification: string;
+  secondaryTags: string[];
   pages: number;
   images: number;
   confidence: number;
-  summary: string;
-  reasoning: string;
-  citations: string[];
+  explanation: string;
+  citations: Citation[];
   safetyCheck: {
     isSafe: boolean;
+    contentSafety: string;
     concerns: string[];
+  };
+  legibilityScore: number;
+  dualLlmAgreement: number;
+  requiresReview: boolean;
+  primaryAnalysis: {
+    model: string;
+    confidence: number;
+    explanation: string;
+  };
+  secondaryAnalysis: {
+    model: string;
+    confidence: number;
+    explanation: string;
   };
 }
 
@@ -43,49 +66,73 @@ const Upload = () => {
     setIsDragging(false);
   };
 
-  const simulateAnalysis = async (fileName: string) => {
+  const analyzeDocument = async (file: File) => {
     setIsProcessing(true);
     setProgress(0);
 
-    // Simulate progress
-    const intervals = [10, 25, 45, 65, 85, 100];
-    for (const target of intervals) {
-      await new Promise(resolve => setTimeout(resolve, 500));
-      setProgress(target);
+    try {
+      // Step 1: Upload document (0-40%)
+      setProgress(10);
+      const uploadData = await uploadDocument(file);
+      const docId = uploadData.doc_id;
+      setProgress(40);
+
+      // Step 2: Classify document (40-100%)
+      setProgress(60);
+      const classifyData = await classifyDocument(docId);
+      setProgress(100);
+
+      // Map backend response to frontend format
+      const analysisResult: AnalysisResult = {
+        fileName: file.name,
+        classification: classifyData.final_category || "Unknown",
+        secondaryTags: classifyData.secondary_tags || [],
+        pages: classifyData.page_count || 0,
+        images: classifyData.image_count || 0,
+        confidence: Math.round((classifyData.confidence || 0) * 100),
+        explanation: classifyData.explanation || "Classification based on AI analysis of document content.",
+        citations: classifyData.citations || [],
+        safetyCheck: {
+          isSafe: !classifyData.raw_signals.has_pii && !classifyData.raw_signals.has_unsafe_pattern,
+          contentSafety: classifyData.content_safety || "Content safety not assessed",
+          concerns: [
+            ...(classifyData.raw_signals.has_pii ? ["PII detected in document"] : []),
+            ...(classifyData.raw_signals.has_unsafe_pattern ? ["Unsafe content detected"] : []),
+            ...classifyData.raw_signals.pii_hits,
+            ...classifyData.raw_signals.unsafe_hits,
+          ],
+        },
+        legibilityScore: classifyData.legibility_score || 0,
+        dualLlmAgreement: classifyData.dual_llm_agreement || 0,
+        requiresReview: classifyData.requires_review || false,
+        primaryAnalysis: {
+          model: classifyData.primary_analysis.model,
+          confidence: Math.round((classifyData.primary_analysis.confidence || 0) * 100),
+          explanation: classifyData.primary_analysis.explanation,
+        },
+        secondaryAnalysis: {
+          model: classifyData.secondary_analysis.model,
+          confidence: Math.round((classifyData.secondary_analysis.confidence || 0) * 100),
+          explanation: classifyData.secondary_analysis.explanation,
+        },
+      };
+
+      setResult(analysisResult);
+      
+      toast({
+        title: "Analysis Complete",
+        description: `Document classified as ${analysisResult.classification}`,
+      });
+    } catch (error) {
+      console.error("Analysis error:", error);
+      toast({
+        title: "Analysis Failed",
+        description: error instanceof Error ? error.message : "Failed to analyze document",
+        variant: "destructive",
+      });
+    } finally {
+      setIsProcessing(false);
     }
-
-    // Mock analysis result
-    const classifications = ["Public", "Confidential", "Highly Sensitive", "Unsafe"];
-    const randomClassification = classifications[Math.floor(Math.random() * classifications.length)];
-    
-    const mockResult: AnalysisResult = {
-      fileName,
-      classification: randomClassification,
-      pages: Math.floor(Math.random() * 20) + 1,
-      images: Math.floor(Math.random() * 10),
-      confidence: Math.floor(Math.random() * 20) + 80,
-      summary: "Document analyzed successfully with multi-modal content processing.",
-      reasoning: `This document has been classified as ${randomClassification} based on the presence of specific content markers, terminology, and data patterns identified through AI analysis.`,
-      citations: [
-        `Page 1: Classification marker detected`,
-        `Page 3: Relevant content identified`,
-        `Image 2: Visual analysis completed`,
-      ],
-      safetyCheck: {
-        isSafe: randomClassification !== "Unsafe",
-        concerns: randomClassification === "Unsafe" 
-          ? ["Potentially harmful content detected", "Requires human review"]
-          : [],
-      },
-    };
-
-    setResult(mockResult);
-    setIsProcessing(false);
-    
-    toast({
-      title: "Analysis Complete",
-      description: `Document classified as ${randomClassification}`,
-    });
   };
 
   const handleDrop = (e: React.DragEvent) => {
@@ -94,14 +141,14 @@ const Upload = () => {
     
     const files = Array.from(e.dataTransfer.files);
     if (files.length > 0) {
-      simulateAnalysis(files[0].name);
+      analyzeDocument(files[0]);
     }
   };
 
   const handleFileInput = (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = e.target.files;
     if (files && files.length > 0) {
-      simulateAnalysis(files[0].name);
+      analyzeDocument(files[0]);
     }
   };
 
@@ -281,9 +328,15 @@ const Upload = () => {
                           {getClassificationIcon(result.classification)}
                         </div>
                       </div>
-                      <div>
+                      <div className="flex-1">
                         <h2 className="text-2xl font-bold mb-1 text-neutral-900 dark:text-neutral-100">{result.fileName}</h2>
-                        <p className="text-neutral-600 dark:text-neutral-400">{result.summary}</p>
+                        <div className="flex flex-wrap gap-2 mt-2">
+                          {result.secondaryTags.map((tag, idx) => (
+                            <Badge key={idx} variant="outline" className="text-xs">
+                              {tag}
+                            </Badge>
+                          ))}
+                        </div>
                       </div>
                     </div>
                     <Button
@@ -296,7 +349,8 @@ const Upload = () => {
                     </Button>
                   </div>
 
-                  <div className="grid md:grid-cols-3 gap-4 mb-6">
+                  {/* Main Stats Grid */}
+                  <div className="grid md:grid-cols-4 gap-4 mb-6">
                     <div className="space-y-1">
                       <div className="text-sm text-neutral-600 dark:text-neutral-400">Classification</div>
                       <Badge 
@@ -316,46 +370,119 @@ const Upload = () => {
                         {result.pages} pages, {result.images} images
                       </div>
                     </div>
+                    <div className="space-y-1">
+                      <div className="text-sm text-neutral-600 dark:text-neutral-400">Legibility</div>
+                      <div className="text-2xl font-bold text-neutral-900 dark:text-neutral-100">
+                        {Math.round(result.legibilityScore * 100)}%
+                      </div>
+                    </div>
                   </div>
 
+                  {/* Explanation */}
                   <div className="space-y-4">
                     <div>
-                      <h3 className="font-semibold mb-2 text-neutral-900 dark:text-neutral-100">Reasoning</h3>
-                      <p className="text-neutral-600 dark:text-neutral-400">{result.reasoning}</p>
+                      <h3 className="font-semibold mb-2 text-neutral-900 dark:text-neutral-100">Analysis Explanation</h3>
+                      <p className="text-neutral-600 dark:text-neutral-400">{result.explanation}</p>
                     </div>
 
+                    {/* Citations & Evidence */}
                     <div>
-                      <h3 className="font-semibold mb-2 text-neutral-900 dark:text-neutral-100">Citations & Evidence</h3>
-                      <ul className="space-y-2">
+                      <h3 className="font-semibold mb-2 text-neutral-900 dark:text-neutral-100">
+                        Citations & Evidence ({result.citations.length})
+                      </h3>
+                      <div className="max-h-96 overflow-y-auto space-y-3">
                         {result.citations.map((citation, idx) => (
-                          <li key={idx} className="flex items-start gap-2 text-sm">
+                          <div key={idx} className="flex items-start gap-2 text-sm p-3 rounded-lg bg-neutral-50 dark:bg-neutral-800/50">
                             <CheckCircle className="w-4 h-4 text-emerald-600 dark:text-emerald-400 mt-0.5 flex-shrink-0" />
-                            <span className="text-neutral-600 dark:text-neutral-400">{citation}</span>
-                          </li>
+                            <div className="flex-1 space-y-1">
+                              <div className="flex items-center gap-2 text-xs text-neutral-500 dark:text-neutral-400">
+                                <span>Page {citation.page}</span>
+                                {citation.image_index && <span>• Image {citation.image_index}</span>}
+                                {citation.source && <Badge variant="outline" className="text-xs">{citation.source}</Badge>}
+                              </div>
+                              <p className="text-neutral-600 dark:text-neutral-300">{citation.snippet}</p>
+                              {citation.region && (
+                                <p className="text-xs text-neutral-500 dark:text-neutral-400">Region: {citation.region}</p>
+                              )}
+                            </div>
+                          </div>
                         ))}
-                      </ul>
+                      </div>
                     </div>
 
+                    {/* Safety Check */}
                     <div>
-                      <h3 className="font-semibold mb-2 text-neutral-900 dark:text-neutral-100">Safety Check</h3>
-                      {result.safetyCheck.isSafe ? (
-                        <div className="flex items-center gap-2 text-emerald-600 dark:text-emerald-400">
-                          <CheckCircle className="w-5 h-5" />
-                          <span>Content is safe for distribution</span>
+                      <h3 className="font-semibold mb-2 text-neutral-900 dark:text-neutral-100">Content Safety</h3>
+                      <div className="space-y-2">
+                        <div className="flex items-center gap-2">
+                          {result.safetyCheck.isSafe ? (
+                            <>
+                              <CheckCircle className="w-5 h-5 text-emerald-600 dark:text-emerald-400" />
+                              <span className="text-emerald-600 dark:text-emerald-400 font-medium">
+                                {result.safetyCheck.contentSafety}
+                              </span>
+                            </>
+                          ) : (
+                            <>
+                              <AlertTriangle className="w-5 h-5 text-rose-600 dark:text-rose-400" />
+                              <span className="text-rose-600 dark:text-rose-400 font-medium">Safety concerns detected</span>
+                            </>
+                          )}
                         </div>
-                      ) : (
-                        <div className="space-y-2">
-                          <div className="flex items-center gap-2 text-rose-600 dark:text-rose-400">
-                            <AlertTriangle className="w-5 h-5" />
-                            <span>Safety concerns detected</span>
-                          </div>
+                        {result.safetyCheck.concerns.length > 0 && (
                           <ul className="ml-7 space-y-1">
                             {result.safetyCheck.concerns.map((concern, idx) => (
                               <li key={idx} className="text-sm text-neutral-600 dark:text-neutral-400">• {concern}</li>
                             ))}
                           </ul>
+                        )}
+                      </div>
+                    </div>
+
+                    {/* Dual LLM Analysis */}
+                    <div className="pt-4 border-t border-neutral-200 dark:border-neutral-700">
+                      <h3 className="font-semibold mb-3 text-neutral-900 dark:text-neutral-100">Dual LLM Validation</h3>
+                      <div className="space-y-3">
+                        <div className="flex items-center gap-2">
+                          <div className="text-sm text-neutral-600 dark:text-neutral-400">Agreement Score:</div>
+                          <div className="text-lg font-bold text-neutral-900 dark:text-neutral-100">
+                            {Math.round(result.dualLlmAgreement * 100)}%
+                          </div>
+                          {result.requiresReview && (
+                            <Badge variant="warning" className="ml-2">Requires Review</Badge>
+                          )}
                         </div>
-                      )}
+                        
+                        <div className="grid md:grid-cols-2 gap-4">
+                          {/* Primary Analysis */}
+                          <div className="p-4 rounded-lg bg-neutral-50 dark:bg-neutral-800/50 space-y-2">
+                            <div className="flex items-center justify-between">
+                              <h4 className="font-semibold text-sm text-neutral-900 dark:text-neutral-100">Primary Analysis</h4>
+                              <Badge variant="outline" className="text-xs">{result.primaryAnalysis.model}</Badge>
+                            </div>
+                            <div className="text-sm text-neutral-600 dark:text-neutral-400">
+                              Confidence: <span className="font-semibold">{result.primaryAnalysis.confidence}%</span>
+                            </div>
+                            <p className="text-xs text-neutral-500 dark:text-neutral-400 line-clamp-3">
+                              {result.primaryAnalysis.explanation}
+                            </p>
+                          </div>
+
+                          {/* Secondary Analysis */}
+                          <div className="p-4 rounded-lg bg-neutral-50 dark:bg-neutral-800/50 space-y-2">
+                            <div className="flex items-center justify-between">
+                              <h4 className="font-semibold text-sm text-neutral-900 dark:text-neutral-100">Secondary Analysis</h4>
+                              <Badge variant="outline" className="text-xs">{result.secondaryAnalysis.model}</Badge>
+                            </div>
+                            <div className="text-sm text-neutral-600 dark:text-neutral-400">
+                              Confidence: <span className="font-semibold">{result.secondaryAnalysis.confidence}%</span>
+                            </div>
+                            <p className="text-xs text-neutral-500 dark:text-neutral-400 line-clamp-3">
+                              {result.secondaryAnalysis.explanation}
+                            </p>
+                          </div>
+                        </div>
+                      </div>
                     </div>
                   </div>
                 </Card>
