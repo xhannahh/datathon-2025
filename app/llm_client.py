@@ -17,3 +17,10 @@ def call_llm(messages: List[Dict[str, str]]) -> Dict[str, Any]:
     # - send `messages` to LLM
     # - parse JSON from response
     return {"mock": True, "messages": messages}
+
+def call_llm_with_vision(messages: List[Dict], images: List[str]) -> Dict:
+    """
+    images: list of base64-encoded image strings
+    """
+    # Gemini can handle images natively
+    # This is MUCH faster than OCR + separate LLM calls
