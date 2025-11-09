@@ -1,6 +1,7 @@
 from fastapi import FastAPI, UploadFile, File, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from typing import List
+import os
 
 from .models import UploadResponse, ClassificationResult, HITLUpdate
 from .storage import save_document, save_extracted, get_document_pages, get_meta, save_classification
