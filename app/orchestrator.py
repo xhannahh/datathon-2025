@@ -130,22 +130,20 @@ def classify_document(doc_id: str,
                 _fallback_decision(signals)
             )
 
-<<<<<<< HEAD
-    if signals.has_unsafe_pattern:
+    """ if signals.has_unsafe_pattern:
         requires_review = True
     elif final_category in ["Unsafe","Highly Sensitive"]:
         requires_review = True
     elif confidence < 0.7:
         requires_review = True
     else:
-        requires_review = False
-=======
+        requires_review = False """
+    
     requires_review = (
-        confidence < 0.75
+        confidence < 0.8
         or signals.has_unsafe_pattern
         or bool(prompt_errors)
     )
->>>>>>> origin/main
 
     return ClassificationResult(
         doc_id=doc_id,
