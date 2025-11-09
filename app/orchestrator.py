@@ -3,8 +3,55 @@ from typing import Dict, Any
 from .models import ClassificationResult, DetectorSignals, Citation
 from .prompt_lib import get_prompt
 from .llm_client import call_llm
+import google.generativeai as genai
+import os, json, re
 
 TRUNCATE_CHARS = 1200
+
+def get_gemini_reasoning(doc_text: str):
+    """Call Gemini to generate structured reasoning about the document."""
+    try:
+        genai.configure(api_key=os.getenv("GEMINI_API_KEY"))
+        model = genai.GenerativeModel(os.getenv("GEMINI_MODEL", "models/gemini-2.5-pro"))
+
+        prompt = f"""
+        You are an AI document analyst assisting a classification system.
+        Review the text below and respond ONLY in valid JSON with this structure. 
+            -Critical information is any sensitive data.
+            -Sensitivity
+                1.	Sensitive/Highly Sensitive: Content that includes PII like SSNs, account/credit card numbers, and proprietary schematics (e.g., defense or next‑gen product designs of military equipment).  
+                2.	Confidential: Internal communications and business documents, customer details (names, addresses), and non-public operational content.
+                3.	Public: Marketing materials, product brochures, public website content, generic images.
+            -Reasoning: Tell us why you pick the sentivity by giving us like "Cite pages containing only public marketing statements; confirm no PII or confidential details." or "Cite the field(s) containing SSN or other PII; show redaction suggestions if supported."
+            -Confidence: give us a rating 0-1 of how confident you are about the rating of the sensitivity.
+            - Content Safety: Evaluated for Child Safety and should not include Hate speech, exploitative, violent, criminal, political news or cyber-threat content.
+                - If safe say "Content is safe for kids"
+                - If not print the information that isn't safe, keep it short.
+:
+        {{
+        "Critical_info": [string],
+        "Sensitivity": "Public" | "Confidential" | "Highly Sensitive",
+        "Reasoning": string,
+        "Confidence": decimal,
+        "Content_safety": string
+        }}
+
+
+        Text:
+        {doc_text[:5000]}
+        """
+
+        response = model.generate_content(prompt)
+        raw = response.text.strip()
+
+        try:
+            return json.loads(raw)
+        except json.JSONDecodeError:
+            match = re.search(r"\{.*\}", raw, re.DOTALL)
+            return json.loads(match.group(0)) if match else {"error": "Could not parse Gemini JSON", "raw": raw}
+    except Exception as e:
+        return {"error": str(e)}
+    
 
 def _prepare_pages(pages: Dict[int, str]) -> Dict[int, str]:
     prepared = {}
@@ -145,7 +192,8 @@ def classify_document(doc_id: str,
         or bool(prompt_errors)
     )
 
-    return ClassificationResult(
+
+    result =  ClassificationResult(
         doc_id=doc_id,
         final_category=final_category,  # type: ignore
         secondary_tags=secondary_tags,
@@ -156,6 +204,39 @@ def classify_document(doc_id: str,
         llm_payload={"prompt_errors": prompt_errors} if prompt_errors else None,
         requires_review=requires_review,
     )
+
+    document_text = "\n".join(pages.values())
+    gemini_result = get_gemini_reasoning(document_text)
+
+    if "error" not in gemini_result:
+        # Store Gemini’s full structured output
+        if result.llm_payload:
+            result.llm_payload["gemini"] = gemini_result
+        else:
+            result.llm_payload = {"gemini": gemini_result}
+
+    # Replace or append reasoning
+    if "reasoning" in gemini_result:
+        result.explanation = gemini_result["reasoning"]
+
+    # Extend tags with Gemini’s identified info
+    if "critical_info" in gemini_result:
+        result.secondary_tags.extend(gemini_result["critical_info"])
+
+    # Update sensitivity if Gemini found it to be more restrictive
+    if result.final_category == "Public" and gemini_result.get("sensitivity"):
+        result.final_category = gemini_result["sensitivity"]
+
+    return {
+    "doc_id": result.doc_id,
+    "final_category": gemini_result.get("Sensitivity", result.final_category),
+    "secondary_tags": gemini_result.get("Critical_info", result.secondary_tags),
+    "confidence": gemini_result.get("Confidence", result.confidence),
+    "explanation": gemini_result.get("Reasoning", result.explanation),
+    "content_safety": gemini_result.get("Content_safety") if "error" not in gemini_result else None
+}
+
+
 
 def _fallback_decision(signals: DetectorSignals):
     # Simple deterministic severity ladder
