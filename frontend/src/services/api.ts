@@ -174,6 +174,22 @@ export const submitHITLFeedback = async (
 };
 
 /**
+ * Delete a document
+ */
+export const deleteDocument = async (docId: string): Promise<{ status: string; doc_id: string }> => {
+  const response = await fetch(`${API_BASE_URL}/documents/${docId}`, {
+    method: "DELETE",
+  });
+
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({ detail: "Failed to delete document" }));
+    throw new Error(error.detail || "Failed to delete document");
+  }
+
+  return response.json();
+};
+
+/**
  * Check API health
  */
 export const checkHealth = async (): Promise<{ status: string }> => {
