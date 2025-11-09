@@ -48,29 +48,20 @@ def _extract_text(candidate) -> str:
     return "".join(text_chunks).strip()
 
 def call_llm(messages: List[Dict[str, str]]) -> Dict[str, Any]:
-    formatted = []
-    for msg in messages:
-        role = ROLE_MAP.get(msg["role"], msg["role"])
-        formatted.append({"role": role, "parts": [{"text": msg["content"]}]})
+    """
+    Implement actual LLM call here.
+    For the datathon, this stub can be replaced with the provided endpoint.
+    Must return JSON-deserializable content (we assume tool prompts enforce JSON).
+    """
+    # Placeholder: echo-style fake result to keep pipeline testable.
+    # In real implementation, you:
+    # - send `messages` to LLM
+    # - parse JSON from response
+    return {"mock": True, "messages": messages}
 
-    try:
-        response = MODEL.generate_content(
-            formatted,
-            safety_settings=SAFETY_SETTINGS,
-        )
-        if not response.candidates:
-            raise ValueError("Gemini returned no candidates")
-        candidate = response.candidates[0]
-        finish_reason = getattr(candidate, "finish_reason", None)
-        if finish_reason not in (None, 1, "STOP"):
-            safety = getattr(candidate, "safety_ratings", None)
-            raise ValueError(
-                f"Gemini blocked output (finish_reason={finish_reason}, safety={safety})"
-            )
-
-        text = _extract_text(candidate)
-        if not text:
-            raise ValueError("Gemini response did not contain text output")
-        return json.loads(text)
-    except Exception as exc:
-        raise RuntimeError(f"Gemini call failed: {exc}") from exc
+def call_llm_with_vision(messages: List[Dict], images: List[str]) -> Dict:
+    """
+    images: list of base64-encoded image strings
+    """
+    # Gemini can handle images natively
+    # This is MUCH faster than OCR + separate LLM calls
