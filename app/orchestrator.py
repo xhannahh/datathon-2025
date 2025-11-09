@@ -118,6 +118,7 @@ def classify_document(doc_id: str,
     prompt_errors: List[str] = []
     summary_pages: Dict[int, str] = {}
     flow_outputs: Dict[str, Any] = {}
+    audit_citations: List[Citation] = []
     flow = get_prompt_flow()
     final_node_id: Optional[str] = None
 
@@ -155,7 +156,9 @@ def classify_document(doc_id: str,
 
         flow_outputs[node_id] = output
 
-        if _output_has_error(output):
+        if not _output_has_error(output):
+            audit_citations.extend(_collect_citations(node_id, output))
+        else:
             prompt_errors.append(node_id)
             if node.get("stop_on_error", True):
                 final_node_id = final_node_id or node_id
@@ -182,8 +185,13 @@ def classify_document(doc_id: str,
     final_out = flow_outputs.get(final_node_id) if final_node_id else None
     image_analysis_out = flow_outputs.get("image_analysis")
 
+    citations: List[Citation] = []
+
     if not final_out or _output_has_error(final_out):
         final_category, secondary_tags, confidence, citations, explanation = _fallback_decision(signals)
+        if citations:
+            audit_citations.extend(citations)
+        citations = _dedupe_citations(audit_citations) if audit_citations else citations
         prompt_tree_result = {
             "final_category": final_category,
             "secondary_tags": secondary_tags,
@@ -198,23 +206,25 @@ def classify_document(doc_id: str,
             final_category = data["final_category"]
             secondary_tags = data.get("secondary_tags", [])
             confidence = float(data.get("confidence", 0.7))
-            citations = [
-                Citation(page=c["page"], snippet=c["snippet"])
+            final_decision_citations = [
+                Citation(
+                    page=c.get("page"),
+                    snippet=c.get("snippet", ""),
+                    image_index=c.get("image_index"),
+                    region=c.get("region"),
+                    source="final_decision",
+                )
                 for c in data.get("citations", [])
+                if isinstance(c, dict) and c.get("snippet")
             ]
-            citations = _dedupe_citations(citations)
+            if final_decision_citations:
+                audit_citations.extend(final_decision_citations)
+            citations = (
+                _dedupe_citations(audit_citations)
+                if audit_citations
+                else final_decision_citations
+            )
             explanation = data.get("explanation", "")
-
-            if image_analysis_out and not _output_has_error(image_analysis_out):
-                for finding in image_analysis_out.get("findings", []):
-                    if finding.get("regions_of_concern"):
-                        snippet = f"[Image {finding['image_index']}] {finding['description']}"
-                        if finding.get("regions_of_concern"):
-                            snippet += f" - Regions: {', '.join(finding['regions_of_concern'])}"
-                        citations.append(
-                            Citation(page=finding.get("page", 0), snippet=snippet)
-                        )
-            citations = _dedupe_citations(citations)
 
             prompt_tree_result = {
                 "final_category": final_category,
@@ -227,6 +237,9 @@ def classify_document(doc_id: str,
         except Exception as exc:
             print(f"Error parsing final_out: {exc}")
             final_category, secondary_tags, confidence, citations, explanation = _fallback_decision(signals)
+            if citations:
+                audit_citations.extend(citations)
+            citations = _dedupe_citations(audit_citations) if audit_citations else citations
             prompt_tree_result = {
                 "final_category": final_category,
                 "secondary_tags": secondary_tags,
@@ -377,11 +390,93 @@ def _extract_path_value(payload: Any, path: str) -> Any:
     return current
 
 
+def _collect_citations(node_id: str, output: Any) -> List[Citation]:
+    citations: List[Citation] = []
+    if output is None:
+        return citations
+    if isinstance(output, dict) and output.get("mock"):
+        return citations
+    try:
+        if node_id == "pii_scan":
+            for span in output.get("pii_spans", []):
+                if not isinstance(span, dict):
+                    continue
+                page = span.get("page")
+                text = span.get("text")
+                if text:
+                    citations.append(
+                        Citation(page=page, snippet=text, source=node_id)
+                    )
+        elif node_id == "unsafe_scan":
+            for cite in output.get("citations", []):
+                if not isinstance(cite, dict):
+                    continue
+                page = cite.get("page")
+                text = cite.get("text")
+                if text:
+                    citations.append(
+                        Citation(page=page, snippet=text, source=node_id)
+                    )
+        elif node_id == "confidentiality_scan":
+            for cite in output.get("citations", []):
+                if not isinstance(cite, dict):
+                    continue
+                page = cite.get("page")
+                snippet = cite.get("snippet")
+                if snippet:
+                    citations.append(
+                        Citation(page=page, snippet=snippet, source=node_id)
+                    )
+        elif node_id == "final_decision":
+            for cite in output.get("citations", []):
+                if not isinstance(cite, dict):
+                    continue
+                snippet = cite.get("snippet")
+                if snippet:
+                    citations.append(
+                        Citation(
+                            page=cite.get("page"),
+                            snippet=snippet,
+                            image_index=cite.get("image_index"),
+                            region=cite.get("region"),
+                            source=node_id,
+                        )
+                    )
+        elif node_id == "image_analysis":
+            for finding in output.get("findings", []):
+                if not isinstance(finding, dict):
+                    continue
+                description = finding.get("description")
+                if not description:
+                    continue
+                regions = finding.get("regions_of_concern") or []
+                region_text = ", ".join(regions) if regions else None
+                citations.append(
+                    Citation(
+                        page=finding.get("page"),
+                        snippet=description,
+                        image_index=finding.get("image_index"),
+                        region=region_text,
+                        source=node_id,
+                    )
+                )
+    except Exception as exc:
+        print(f"Warning: unable to extract citations for node '{node_id}': {exc}")
+    return citations
+
+
 def _dedupe_citations(citations: List[Citation]) -> List[Citation]:
     seen = set()
     unique: List[Citation] = []
     for cite in citations:
-        key = (cite.page, cite.snippet[:100].strip())
+        snippet_key = (cite.snippet or "").strip()
+        key = (
+            cite.page,
+            cite.image_index,
+            (cite.region or "").strip(),
+            (cite.source or ""),
+            snippet_key[:120],
+        )
         if key not in seen:
             seen.add(key)
             unique.append(cite)

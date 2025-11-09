@@ -41,7 +41,9 @@ def run_detectors(pages: Dict[int, str]) -> DetectorSignals:
         if SSN_PATTERN.search(text) or CC_PATTERN.search(text):
             signals.has_pii = True
             snippet = text[:200].replace("\n", " ")
-            signals.pii_hits.append(Citation(page=page, snippet=snippet))
+            signals.pii_hits.append(
+                Citation(page=page, snippet=snippet, source="detector_pii")
+            )
 
         # internal (whole word)
         if any(rx.search(lower) for rx in internal_regexes):
@@ -52,6 +54,8 @@ def run_detectors(pages: Dict[int, str]) -> DetectorSignals:
         if any(rx.search(lower) for rx in unsafe_regexes):
             signals.has_unsafe_pattern = True
             snippet = text[:200].replace("\n", " ")
-            signals.unsafe_hits.append(Citation(page=page, snippet=snippet))
+            signals.unsafe_hits.append(
+                Citation(page=page, snippet=snippet, source="detector_unsafe")
+            )
 
     return signals

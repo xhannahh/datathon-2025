@@ -11,8 +11,11 @@ class UploadResponse(BaseModel):
     status: str = "ingested"
 
 class Citation(BaseModel):
-    page: int
+    page: Optional[int] = None
     snippet: str
+    image_index: Optional[int] = None
+    region: Optional[str] = None
+    source: Optional[str] = None
 
 class DetectorSignals(BaseModel):
     has_pii: bool = False
